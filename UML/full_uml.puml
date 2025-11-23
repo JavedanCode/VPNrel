@@ -1,0 +1,152 @@
+@startuml
+
+title VPN Project - Full UML Class Diagram
+
+' ===========================
+' PACKAGE STRUCTURE
+' ===========================
+package "core" {
+    package "network" {
+        class SocketHandler {
+            - sockfd : int
+            + connectToServer(ip : string, port : int) : bool
+            + createServerSocket(port : int) : bool
+            + acceptClient() : int
+            + sendData(data : vector<uint8_t>) : int
+            + receiveData(buffer : vector<uint8_t>) : int
+        }
+
+        class TunnelManager {
+            - active : bool
+            - clientIP : string
+            + initializeTunnel(clientIP : string) : bool
+            + closeTunnel() : void
+            + isActive() : bool
+        }
+    }
+
+    package "encryption" {
+        class EncryptionModule {
+            + encrypt(plaintext : string, key : string) : string
+            + decrypt(ciphertext : string, key : string) : string
+        }
+
+        class KeyManager {
+            + generateSessionKey() : string
+            + performHandshake(socket : int) : bool
+        }
+    }
+
+    package "packet" {
+        class PacketHeader {
+            + version : uint8_t
+            + clientID : uint16_t
+            + payloadLength : uint16_t
+            + checksum : uint32_t
+        }
+
+        class PacketHandler {
+            + encapsulate(clientID : uint16_t, data : string) : vector<uint8_t>
+            + decapsulate(packet : vector<uint8_t>) : string
+            + computeChecksum(data : vector<uint8_t>) : uint32_t
+        }
+    }
+}
+
+package "system" {
+    package "client" {
+        class VPNClient {
+            - socket : SocketHandler
+            - tunnel : TunnelManager
+            - packetHandler : PacketHandler
+            - encryption : EncryptionModule
+            - keyManager : KeyManager
+            - sessionKey : string
+            + connectToServer(ip : string, port : int) : bool
+            + sendMessage(message : string) : void
+            + receiveLoop() : void
+            + run() : void
+        }
+    }
+
+    package "server" {
+        class VPNServer {
+            - serverSocket : SocketHandler
+            - clientThreads : vector<thread>
+            - running : atomic<bool>
+            - nextClientID : int
+            + start(port : int) : void
+            + acceptClients() : void
+            + shutdown() : void
+        }
+
+        class ClientHandler {
+            - socket : int
+            - clientID : int
+            - active : bool
+            - encryption : EncryptionModule
+            - packetHandler : PacketHandler
+            - tunnel : TunnelManager
+            - keyManager : KeyManager
+            - sessionKey : string
+            + handleConnection() : void
+        }
+
+        ' Associations
+        VPNServer "1" o-- "*" ClientHandler : manages >
+    }
+}
+
+package "utils" {
+    class Logger {
+        + log(level : LogLevel, msg : string) : void
+    }
+
+    class Config {
+        - values : unordered_map<string,string>
+        + load(filename : string) : bool
+        + get(key : string) : string
+    }
+
+    class Tester {
+        + testConnection() : void
+        + testEncryption() : void
+        + testPacketHandling() : void
+    }
+
+    enum LogLevel {
+        INFO
+        WARN
+        ERROR
+        DEBUG
+    }
+}
+
+' ===========================
+' RELATIONSHIPS
+' ===========================
+VPNClient --> SocketHandler
+VPNClient --> TunnelManager
+VPNClient --> PacketHandler
+VPNClient --> EncryptionModule
+VPNClient --> KeyManager
+
+ClientHandler --> EncryptionModule
+ClientHandler --> PacketHandler
+ClientHandler --> TunnelManager
+ClientHandler --> KeyManager
+
+VPNServer --> SocketHandler
+VPNServer --> ClientHandler
+
+PacketHandler --> PacketHeader
+
+Tester --> SocketHandler
+Tester --> EncryptionModule
+Tester --> PacketHandler
+Tester --> Logger
+
+Logger --> LogLevel
+Config --> Logger
+
+@enduml
