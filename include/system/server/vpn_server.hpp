@@ -18,9 +18,17 @@ public:
     // Gracefully shuts down the server and connected clients
     void shutdown();
 
-    void routeMessage(int fromClientID, const std::string& message);
+    void routeMessage(int fromClientID, const std::vector<uint8_t>& payload);
+
 
     void removeClient(int clientID);
+
+    void routeFileStart(int fromID, const std::vector<uint8_t>& payload);
+    void routeFileChunk(int fromID, const std::vector<uint8_t>& payload);
+    void routeFileEnd(int fromID);
+
+
+
 
 
 private:

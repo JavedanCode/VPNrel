@@ -1,6 +1,6 @@
 #include "system/server/vpn_server.hpp"
+#include "core/packet/message_types.hpp"
 #include <iostream>
-
 
 void VPNServer::start(int port) {
     std::cout << "[SERVER] Starting VPN server on port " << port << "...\n";
@@ -13,7 +13,6 @@ void VPNServer::start(int port) {
     running = true;
     std::cout << "[SERVER] Server is running. Waiting for clients...\n";
 
-    // Begin accepting clients (blocking loop)
     acceptClients();
 }
 
@@ -32,28 +31,22 @@ void VPNServer::acceptClients() {
         std::cout << "[SERVER] Accepted new client. Assigned ID = "
                   << assignedID << "\n";
 
-        // 1) Generate session key
         uint8_t key = KeyManager::generateSessionKey();
 
-        // 2) Create handler (handler owns the socket)
         ClientHandler* handler = new ClientHandler(clientFD, assignedID, key, this);
 
-        // 3) Add to registry BEFORE starting thread
         connectedClients[assignedID] = handler;
         std::cout << "[SERVER] Client " << assignedID << " added to registry.\n";
 
-        // 4) Send session key using the handler's socket
         if (!KeyManager::sendSessionKey(handler->getSocket(), key)) {
             std::cerr << "[SERVER] Failed to send session key. Closing client.\n";
 
-            // Remove from registry & free handler
             connectedClients.erase(assignedID);
-            delete handler;  // SocketHandler destructor will close the FD
+            delete handler;
 
             continue;
         }
 
-        // 5) Launch thread to handle this client
         clientThreads.emplace_back(&ClientHandler::handleConnection, handler);
     }
 }
@@ -65,7 +58,6 @@ void VPNServer::shutdown() {
 
     running = false;
 
-    // Join all client threads
     for (auto& th : clientThreads) {
         if (th.joinable())
             th.join();
@@ -73,37 +65,73 @@ void VPNServer::shutdown() {
 
     std::cout << "[SERVER] All client threads terminated.\n";
 
-    // SocketHandler destructor will close listening socket
 }
 
-void VPNServer::routeMessage(int fromClientID, const std::string& message) {
-    std::cout << "[SERVER] Routing message from client " << fromClientID << "...\n";
+void VPNServer::routeMessage(int fromClientID, const std::vector<uint8_t>& payload) {
 
-    for (auto& [clientID, handler] : connectedClients) {
+    std::cout << "[SERVER] Routing TEXT message from client "
+              << fromClientID << "...\n";
 
-        if (clientID == fromClientID)
-            continue;   // Do not send message back to sender
+    for (auto& [clientID, handler] : connectedClients)
+    {
+        if (!handler) continue;
+        if (clientID == fromClientID) continue;
 
-        if (!handler) {
-            std::cerr << "[SERVER] Null handler for client " << clientID << "\n";
-            continue;
-        }
-
-        // Forward message
-        handler->sendToClient("[From " + std::to_string(fromClientID) + "] " + message);
-
-        std::cout << "[SERVER] Forwarded message to client " << clientID << "\n";
+        handler->sendText(fromClientID, payload);
     }
 }
 
 void VPNServer::removeClient(int clientID) {
+    auto it = connectedClients.find(clientID);
+    if (it == connectedClients.end())
+        return;
+
     std::cout << "[SERVER] Removing client " << clientID << "...\n";
 
-    auto it = connectedClients.find(clientID);
-    if (it != connectedClients.end()) {
-        delete it->second;  // free ClientHandler
-        connectedClients.erase(it);
+    delete it->second;
+    connectedClients.erase(it);
+}
+
+void VPNServer::routeFileStart(int fromClientID, const std::vector<uint8_t>& payload)
+{
+    std::cout << "[SERVER] Routing FILE_START from client " << fromClientID << "...\n";
+
+    for (auto& [clientID, handler] : connectedClients)
+    {
+        if (!handler) continue;
+        if (clientID == fromClientID) continue;
+
+        handler->sendFileStart(fromClientID, payload);
     }
 }
+
+void VPNServer::routeFileChunk(int fromClientID, const std::vector<uint8_t>& payload)
+{
+    std::cout << "[SERVER] Routing FILE_CHUNK from client " << fromClientID << "...\n";
+
+    for (auto& [clientID, handler] : connectedClients)
+    {
+        if (!handler) continue;
+        if (clientID == fromClientID) continue;
+
+        handler->sendFileChunk(fromClientID, payload);
+    }
+}
+
+void VPNServer::routeFileEnd(int fromClientID)
+{
+    std::cout << "[SERVER] Routing FILE_END from client " << fromClientID << "...\n";
+
+    for (auto& [clientID, handler] : connectedClients)
+    {
+        if (!handler) continue;
+        if (clientID == fromClientID) continue;
+
+        handler->sendFileEnd(fromClientID);
+    }
+}
+
+
+
 
 

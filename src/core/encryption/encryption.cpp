@@ -4,15 +4,13 @@
 namespace EncryptionModule {
 
     void encrypt(std::vector<uint8_t>& data, uint8_t key) {
-        for (auto& byte : data) {
-            byte ^= key;  // XOR encrypt
-        }
+        for (auto& b : data)
+            b ^= key;
     }
 
     void decrypt(std::vector<uint8_t>& data, uint8_t key) {
-        for (auto& byte : data) {
-            byte ^= key;  // XOR decrypt (same operation)
-        }
+        for (auto& b : data)
+            b ^= key;
     }
 
 }

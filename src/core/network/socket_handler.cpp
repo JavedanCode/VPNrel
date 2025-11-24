@@ -7,10 +7,6 @@
 #include <windows.h>
 #pragma comment(lib, "ws2_32.lib")
 
-// =============================
-// SocketHandler Implementation
-// =============================
-
 SocketHandler::SocketHandler() {
 
     WSADATA wsaData;
@@ -21,7 +17,7 @@ SocketHandler::SocketHandler() {
         std::cerr << "WSAStartup failed with error : " << result << std::endl;
     }
 
-    sockfd = INVALID_SOCKET; // Initialize to invalid socket
+    sockfd = INVALID_SOCKET;
 }
 
 SocketHandler::~SocketHandler() {
@@ -66,7 +62,6 @@ bool SocketHandler::connectToServer(const std::string& ip, int port) {
     return true;
 }
 
-
 bool SocketHandler::createServerSocket(int port) {
 
     sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -101,7 +96,6 @@ bool SocketHandler::createServerSocket(int port) {
 
 }
 
-
 SOCKET SocketHandler::acceptClient() {
     sockaddr_in clientAddr{};
     int clientSize = sizeof(clientAddr);
@@ -121,7 +115,6 @@ SOCKET SocketHandler::acceptClient() {
 
     return clientSocket;
 }
-
 
 int SocketHandler::sendData(const std::vector<uint8_t>& data) {
     if (sockfd == INVALID_SOCKET) {
@@ -162,53 +155,51 @@ void SocketHandler::closeSocket() {
     }
 }
 
-int SocketHandler::receiveData(std::vector<uint8_t>& buffer) {
-    if (sockfd == INVALID_SOCKET) {
-        // Silently ignore, this happens during clean shutdown
-        return -1;
-    }
+int SocketHandler::receiveData(std::vector<uint8_t>& packetOut)
+{
+    packetOut.clear();
 
+    static std::vector<uint8_t> buffer;
     const int TEMP_BUF_SIZE = 4096;
-    char tempBuf[TEMP_BUF_SIZE];
+    char temp[TEMP_BUF_SIZE];
 
-    int bytesReceived = recv(sockfd, tempBuf, TEMP_BUF_SIZE, 0);
+    int bytesReceived = recv(sockfd, temp, TEMP_BUF_SIZE, 0);
 
-    // ===============================
-    // 1) Clean disconnect → NO ERROR
-    // ===============================
-    if (bytesReceived == 0) {
-        // Connection closed normally (client quit)
-        return 0;
-    }
+    if (bytesReceived <= 0)
+        return bytesReceived;
 
-    // ===============================
-    // 2) Real error → only print if it matters
-    // ===============================
-    if (bytesReceived == SOCKET_ERROR) {
-        int err = WSAGetLastError();
-
-        // Ignore harmless disconnect-related errors
-        if (err != WSAECONNRESET &&
-            err != WSAENOTSOCK &&
-            err != WSAECONNABORTED)  // <-- ADD THIS (10053)
-        {
-            std::cerr << "[SocketHandler] recv() error: " << err << "\n";
-        }
-
-        return -1;
-    }
-
-    // ===============================
-    // 3) Normal successful read
-    // ===============================
-    buffer.clear();
     buffer.insert(buffer.end(),
-                  reinterpret_cast<uint8_t*>(tempBuf),
-                  reinterpret_cast<uint8_t*>(tempBuf) + bytesReceived);
+                  (uint8_t*)temp,
+                  (uint8_t*)temp + bytesReceived);
 
-    return bytesReceived;
+    if (buffer.size() < 8)
+        return -2;
+
+    uint32_t payloadLen =
+        (buffer[3] << 24) |
+        (buffer[4] << 16) |
+        (buffer[5] << 8)  |
+         buffer[6];
+
+    uint32_t totalPacketSize = 8 + payloadLen;
+
+    if (buffer.size() < totalPacketSize)
+        return -2;
+
+    packetOut.insert(packetOut.end(),
+                     buffer.begin(),
+                     buffer.begin() + totalPacketSize);
+
+    buffer.erase(buffer.begin(),
+                 buffer.begin() + totalPacketSize);
+
+    return totalPacketSize;
 }
 
+
+SOCKET SocketHandler::getRawSocket() const {
+    return sockfd;
+}
 
 
 

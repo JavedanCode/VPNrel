@@ -4,6 +4,7 @@
 #include <iostream>
 #include <ostream>
 #include <random>
+#include <thread>
 
 namespace KeyManager {
 
@@ -35,20 +36,37 @@ namespace KeyManager {
         return true;
     }
 
-    bool receiveSessionKey(SocketHandler& serverSocket, uint8_t& outKey) {
+    bool receiveSessionKey(SocketHandler& socket, uint8_t& outKey) {
+        char keyByte = 0;
 
-        std::vector<uint8_t> buffer;
+        while (true)
+        {
+            int n = recv(socket.getRawSocket(), &keyByte, 1, 0);
 
-        int bytesReceived = serverSocket.receiveData(buffer);
+            if (n == 1) {
+                outKey = static_cast<uint8_t>(keyByte);
+                std::cout << "[KeyManager] Session key received: " << (int)outKey << "\n";
+                return true;
+            }
 
-        if (bytesReceived <= 0) {
-            std::cerr << "[KeyManger] Failed to receive session key. Bytes received: " << bytesReceived << std::endl;
-            return false;
+            if (n == 0) {
+                std::cerr << "[KeyManager] Connection closed while receiving key.\n";
+                return false;
+            }
+
+            if (n == SOCKET_ERROR) {
+                int err = WSAGetLastError();
+                if (err == WSAEWOULDBLOCK) {
+                    // just try again
+                    continue;
+                }
+
+                std::cerr << "[KeyManager] recv() error: " << err << "\n";
+                return false;
+            }
         }
 
-        outKey = buffer[0];
-
-        std::cout << "[KeyManager] Session key received from server." << std::endl;
-        return true;
+        return false;
     }
+
 }

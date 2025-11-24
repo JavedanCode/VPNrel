@@ -1,9 +1,6 @@
 #include "system/server/client_handler.hpp"
-#include "utils/logger/logger.hpp"
-#include <iostream>
-
 #include "system/server/vpn_server.hpp"
-
+#include <iostream>
 
 ClientHandler::ClientHandler(int clientSocketFD, int clientID, uint8_t key, VPNServer* server)
     : clientID(clientID), sessionKey(key), server(server)
@@ -13,115 +10,140 @@ ClientHandler::ClientHandler(int clientSocketFD, int clientID, uint8_t key, VPNS
     active = true;
 }
 
-ClientHandler::ClientHandler(int clientSocketFD, int clientID, VPNServer* server)
-    : clientID(clientID), server(server)
-{
-    clientSocket.setSocket(clientSocketFD);
-    tunnel.initializeTunnel("unknown");
-    active = true;
-}
-
-
-
-
-
 void ClientHandler::handleConnection() {
-    std::cout << "[ClientHandler] Handling connection for client " << clientID << "...\n";
+    std::cout << "[ClientHandler] Handling connection for client "
+              << clientID << "...\n";
 
-    // Mark tunnel active (already done in constructor, but good for clarity)
-    tunnel.initializeTunnel("unknown");
-
-    // Now we move on to receiving packets continuously in Phase 2
-    // We'll add the loop next.
-
-    // -------------------------------------------
-    // STEP 2 — Receive loop
-    // -------------------------------------------
-    std::cout << "[ClientHandler] Entering receive loop for client " << clientID << "...\n";
+    active = true;
+    tcpBuffer.clear();
 
     while (active) {
-        std::vector<uint8_t> packetBytes;
 
-        // Read data from client
-        int bytesReceived = clientSocket.receiveData(packetBytes);
+        std::vector<uint8_t> recvBuf;
+        int bytesReceived = clientSocket.receiveData(recvBuf);
 
-        // Case 1: Client disconnected
         if (bytesReceived <= 0) {
             std::cout << "[ClientHandler] Client " << clientID
                       << " disconnected.\n";
             active = false;
-            if (server) {
-                server->removeClient(clientID);
-            }
+            server->removeClient(clientID);
             break;
         }
 
-        // Case 2: Not enough data for a packet header
-        if (packetBytes.size() < 7) { // version(1) + clientID(2) + length(4)
-            std::cerr << "[ClientHandler] Received malformed packet from client "
-                      << clientID << ".\n";
-            continue;  // skip and wait for next
-        }
+        tcpBuffer.insert(tcpBuffer.end(), recvBuf.begin(), recvBuf.end());
 
-        // Decapsulate packet
-        uint16_t extractedClientID = 0;
-        std::vector<uint8_t> payload;
+        while (tcpBuffer.size() >= 8) {
+            uint32_t payloadLen =
+                (static_cast<uint32_t>(tcpBuffer[3]) << 24) |
+                (static_cast<uint32_t>(tcpBuffer[4]) << 16) |
+                (static_cast<uint32_t>(tcpBuffer[5]) << 8)  |
+                 static_cast<uint32_t>(tcpBuffer[6]);
 
-        if (!packetHandler.decapsulate(packetBytes, extractedClientID, payload)) {
-            std::cerr << "[ClientHandler] Failed to decapsulate packet from client "
-                      << clientID << ".\n";
-            continue;
-        }
+            uint32_t totalSize = 8 + payloadLen;
 
-        // Decrypt message
-        EncryptionModule::decrypt(payload, sessionKey);
+            if (tcpBuffer.size() < totalSize)
+                break; // wait for more data
 
-        // Convert decrypted payload into string
-        std::string message(payload.begin(), payload.end());
+            std::vector<uint8_t> packet(
+                tcpBuffer.begin(),
+                tcpBuffer.begin() + totalSize
+            );
 
-        // Log message
-        std::cout << "[ClientHandler] Client " << clientID
-                  << " says: " << message << "\n";
+            tcpBuffer.erase(
+                tcpBuffer.begin(),
+                tcpBuffer.begin() + totalSize
+            );
 
-        // Route the message to other clients
-        if (server) {
-            server->routeMessage(clientID, message);
+            uint16_t embeddedID = 0;
+            uint32_t payloadLenOut = 0;
+            uint8_t messageType = 0;
+            std::vector<uint8_t> payload;
+
+            if (!packetHandler.decapsulate(packet,
+                                           embeddedID,
+                                           payloadLenOut,
+                                           messageType,
+                                           payload)) {
+                std::cerr << "[ClientHandler] Decapsulation failed for client "
+                          << clientID << ".\n";
+                continue;
+            }
+
+            if (messageType != MSG_FILE_END && !payload.empty()) {
+                EncryptionModule::decrypt(payload, sessionKey);
+            }
+
+            switch (messageType)
+            {
+                case MSG_TEXT:
+                {
+                    std::string msg(payload.begin(), payload.end());
+                    std::cout << "[ClientHandler] Client " << clientID
+                              << " says: " << msg << "\n";
+
+                    // route decrypted text to other clients
+                    server->routeMessage(clientID, payload);
+                    break;
+                }
+
+                case MSG_FILE_START:
+                    server->routeFileStart(clientID, payload);
+                    break;
+
+                case MSG_FILE_CHUNK:
+                    server->routeFileChunk(clientID, payload);
+                    break;
+
+                case MSG_FILE_END:
+                    server->routeFileEnd(clientID);
+                    break;
+
+                default:
+                    std::cerr << "[ClientHandler] Unknown messageType "
+                              << (int)messageType
+                              << " from client " << clientID << "\n";
+                    break;
+            }
         }
     }
 
-    // Cleanup
     tunnel.closeTunnel();
-    std::cout << "[ClientHandler] Tunnel closed for client " << clientID << ".\n";
+    std::cout << "[ClientHandler] Tunnel closed for client "
+              << clientID << ".\n";
 }
 
-void ClientHandler::sendToClient(const std::string& message) {
-    if (!active) {
-        std::cerr << "[ClientHandler] Cannot send, client inactive.\n";
-        return;
-    }
+void ClientHandler::sendText(int fromID, const std::vector<uint8_t>& rawPayload)
+{
 
-    // Convert message → binary
-    std::vector<uint8_t> payload(message.begin(), message.end());
+    std::vector<uint8_t> encrypted = rawPayload;
+    EncryptionModule::encrypt(encrypted, sessionKey);
 
-    // Encrypt using session key
-    EncryptionModule::encrypt(payload, sessionKey);
-
-    // Use the clientID assigned by the server
-    uint16_t id = clientID;
-
-    // Build packet
-    std::vector<uint8_t> packet = packetHandler.encapsulate(id, payload);
-
-    // Send packet
-    int bytesSent = clientSocket.sendData(packet);
-
-    if (bytesSent <= 0) {
-        std::cerr << "[ClientHandler] Failed to send message to client "
-                  << clientID << ".\n";
-    } else {
-        std::cout << "[ClientHandler] Sent " << bytesSent
-                  << " bytes to client " << clientID << ".\n";
-    }
+    auto packet = packetHandler.encapsulate(fromID, MSG_TEXT, encrypted);
+    clientSocket.sendData(packet);
 }
 
+void ClientHandler::sendFileStart(int fromID, const std::vector<uint8_t>& payload)
+{
+    auto encrypted = payload;
+    EncryptionModule::encrypt(encrypted, sessionKey);
 
+    auto packet = packetHandler.encapsulate(fromID, MSG_FILE_START, encrypted);
+    clientSocket.sendData(packet);
+}
+
+void ClientHandler::sendFileChunk(int fromID, const std::vector<uint8_t>& payload)
+{
+    auto encrypted = payload;
+    EncryptionModule::encrypt(encrypted, sessionKey);
+
+    auto packet = packetHandler.encapsulate(fromID, MSG_FILE_CHUNK, encrypted);
+    clientSocket.sendData(packet);
+}
+
+void ClientHandler::sendFileEnd(int fromID)
+{
+    std::vector<uint8_t> empty;
+    auto packet = packetHandler.encapsulate(fromID, MSG_FILE_END, empty);
+    clientSocket.sendData(packet);
+
+}

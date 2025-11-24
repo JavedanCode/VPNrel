@@ -1,54 +1,57 @@
 #include "core/packet/packet_handler.hpp"
 #include <cstdint>
 
-std::vector<uint8_t> PacketHandler::encapsulate(uint16_t clientID, std::vector<uint8_t>& payload) {
+std::vector<uint8_t> PacketHandler::encapsulate(uint16_t clientID, uint8_t messageType, std::vector<uint8_t>& payload) {
     std::vector<uint8_t> packet;
 
-    uint8_t version = 1;
-    packet.push_back(version);
+    uint32_t payloadLen = payload.size();
+
+    packet.reserve(8 + payloadLen);
+
+    packet.push_back(1);
 
     packet.push_back((clientID >> 8) & 0xFF);
-    packet.push_back((clientID & 0xFF));
-
-    uint32_t payloadLen = static_cast<uint32_t>(payload.size());
+    packet.push_back(clientID & 0xFF);
 
     packet.push_back((payloadLen >> 24) & 0xFF);
     packet.push_back((payloadLen >> 16) & 0xFF);
     packet.push_back((payloadLen >> 8) & 0xFF);
-    packet.push_back((payloadLen & 0xFF));
+    packet.push_back(payloadLen & 0xFF);
+
+    packet.push_back(messageType);
 
     packet.insert(packet.end(), payload.begin(), payload.end());
 
     return packet;
 }
 
-bool PacketHandler::decapsulate(const std::vector<uint8_t>& packet, uint16_t& outClientID, std::vector <uint8_t>& outPayload) {
-    const size_t HEADER_SIZE = 7;
-    if (packet.size() < HEADER_SIZE) {
+bool PacketHandler::decapsulate(const std::vector<uint8_t>& packet, uint16_t& outClientID, uint32_t& outPayloadLength, uint8_t& outMessageType, std::vector<uint8_t>& outPayload)
+{
+    if (packet.size() < 8) {
         return false;
     }
 
-    size_t index = 0;
+    outClientID = (packet[1] << 8) | packet[2];
 
-    uint8_t version = packet[index++];
-    if (version != 1) {
-        return false;
-    }
+    outPayloadLength =
+        (packet[3] << 24) |
+        (packet[4] << 16) |
+        (packet[5] << 8)  |
+        (packet[6]);
 
-    uint16_t clientID = (packet[index] << 8 | packet[index + 1]);
-    index += 2;
+    outMessageType = packet[7];
 
-    uint32_t payloadLen = (packet[index] << 24 ) | (packet[index + 1] << 16) | (packet[index + 2] << 8) | packet[index + 3];
-    index += 4;
-
-
-    if (packet.size() < HEADER_SIZE + payloadLen) {
+    if (packet.size() < 8 + outPayloadLength) {
         return false;
     }
 
     outPayload.clear();
-    outPayload.insert(outPayload.end(), packet.begin() + index, packet.begin() + index + payloadLen);
-    outClientID = clientID;
+    outPayload.insert(
+        outPayload.end(),
+        packet.begin() + 8,
+        packet.begin() + 8 + outPayloadLength
+    );
+
     return true;
 }
 

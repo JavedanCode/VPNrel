@@ -42,6 +42,9 @@ public:
 
     void closeSocket();
 
+    SOCKET getRawSocket() const;
+
+
 
 private:
     SOCKET sockfd;  // Main socket descriptor
